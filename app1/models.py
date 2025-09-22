@@ -50,3 +50,22 @@ class Course(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.difficulty_level})"
+
+
+# Enrollment Model
+class Enrollment(models.Model):
+    """
+    Tracks which students are enrolled in which courses.
+    Tracks progress percentage.
+    """
+    student = models.ForeignKey(User, on_delete=models.CASCADE, related_name="student_enrollments")
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="course_enrollments")
+    progress = models.DecimalField(max_digits=5, decimal_places=2, default=0.00)
+    enrolled_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('student', 'course')  # prevent duplicate enrollment
+
+    def __str__(self):
+        return f"{self.student.username} → {self.course.name}"
+      
