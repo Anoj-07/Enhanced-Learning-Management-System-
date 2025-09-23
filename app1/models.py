@@ -68,4 +68,32 @@ class Enrollment(models.Model):
 
     def __str__(self):
         return f"{self.student.username} → {self.course.name}"
-      
+
+# Assessment model
+class Assessment(models.Model):
+    """
+    Represents an assessment (quiz/test) for a course.
+    """
+
+    course =  models.ForeignKey(Course, on_delete=models.CASCADE, related_name="assessments")
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    due_date = models.DateTimeField()
+
+    def __str__(self):
+        return f"{self.title} ({self.course.name})"
+    
+
+# submission model
+class Submission(models.Model):
+    """
+    Student submissions for assessments.
+    """
+    assessment = models.ForeignKey(Assessment, on_delete=models.CASCADE, related_name="submissions")
+    student = models.ForeignKey(User, on_delete=models.CASCADE, related_name="student_submissions")
+    submitted_file = models.FileField(upload_to="submissions/", blank=True, null=True)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    grade = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.student.username}'s submission for {self.assessment.title}"
