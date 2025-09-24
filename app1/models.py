@@ -3,27 +3,7 @@ from django.contrib.auth.models import User
 
 # Create your models here.
 # profile model for Admin, Instructor, student, sponsor
-
-class Profile(models.Model):
-
-    """
-    Extends the default User model with role and extra info.
-    This keeps authentication simple using DRF's TokenAuth or JWT.
-    """
-    ROLE_CHOICES = [
-        ("Admin", "Admin"),
-        ("Instructor", "Instructor"),
-        ("Student", "Student"),
-        ("Sponsor", "Sponsor"),
-    ]
-
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
-    full_name = models.CharField(max_length=255)
-    is_verified = models.BooleanField(default=False, help_text="If the user is verified by in the system ")
-
-    def __str__(self):
-        return f"{self.full_name} ({self.role})"
+# use in view and serializer to Group users
 
 
 # course Model
