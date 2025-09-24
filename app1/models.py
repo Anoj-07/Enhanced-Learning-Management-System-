@@ -97,3 +97,48 @@ class Submission(models.Model):
 
     def __str__(self):
         return f"{self.student.username}'s submission for {self.assessment.title}"
+
+# sponsorProfile model
+
+class SponsorProfile(models.Model):
+    """
+    Extra info for sponsors.
+    """
+
+    sponsor = models.OneToOneField(User, on_delete=models.CASCADE, related_name="sponsor_profile")
+    organization_name = models.CharField(max_length=255, blank=True, null=True)
+    total_funds = models.DecimalField(max_digits=15, decimal_places=2, default=0.00
+                                      , help_text="Total funds available for sponsorships")
+    
+    def __str__(self):
+        return f"Sponsor: {self.sponsor.username}"
+
+
+#Sponsorship model
+class Sponsorship(models.Model):
+    """
+    Links sponsors to students or paid courses they fund.
+    """
+    sponsor = models.ForeignKey(SponsorProfile, on_delete=models.CASCADE, related_name="sponsorships")
+    student = models.ForeignKey(User, on_delete=models.CASCADE, related_name="student_sponsorships")
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="course_sponsorships", blank=True, null=True,
+                               help_text="Optional if sponsorship is course-specific")
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.sponsor.sponsor.username} sponsors {self.student.username}"
+
+
+# Notification model
+class Notification(models.Model):
+    """
+    In-app notifications for users.
+    """
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notifications")
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_read = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"Notification for {self.user.username}"
