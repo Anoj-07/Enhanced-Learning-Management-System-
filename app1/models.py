@@ -142,3 +142,47 @@ class Notification(models.Model):
 
     def __str__(self):
         return f"Notification for {self.user.username}"
+    
+
+
+# for payment transaction model
+class Transaction(models.Model):
+    """
+    Stores payment transaction details for sponsors or students.
+    Customized for Nepalese payment gateways (eSewa, Khalti, Fonepay, IME Pay).
+    """
+    PAYMENT_STATUS = [
+        ("Pending", "Pending"),
+        ("Completed", "Completed"),
+        ("Failed", "Failed"),
+    ]
+
+    PAYMENT_METHOD = [
+        ("eSewa", "eSewa"),
+        ("Khalti", "Khalti"),
+        ("Fonepay", "Fonepay"),
+        ("IMEPay", "IME Pay"),
+        ("BankTransfer", "Bank Transfer"),
+        ("Cash", "Cash"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="transactions")
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="transactions")
+    sponsorship = models.ForeignKey(
+        "Sponsorship",
+        on_delete=models.SET_NULL,
+        related_name="transactions",
+        null=True,
+        blank=True,
+        help_text="If this payment is part of a sponsorship"
+    )
+
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.CharField(max_length=50, choices=PAYMENT_METHOD)
+    status = models.CharField(max_length=20, choices=PAYMENT_STATUS, default="Pending")
+    transaction_id = models.CharField(max_length=255, unique=True, help_text="Transaction ID from gateway")
+    reference_code = models.CharField(max_length=255, blank=True, null=True, help_text="Optional ref. like Khalti token/eSewa refId")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.amount} via {self.payment_method} ({self.status})"
