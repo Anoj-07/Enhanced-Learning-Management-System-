@@ -19,9 +19,9 @@ class Course(models.Model):
     ]
 
     name = models.CharField(max_length=255)
-    description = models.TextField()
+    description = models.TextField(null=True, blank=True)
     difficulty_level = models.CharField(max_length=50, choices=DIFFICULTY_CHOICES)
-    instructor = models.ForeignKey(User, on_delete=models.CASCADE, related_name="instructor_courses")
+    instructor = models.ForeignKey(User, on_delete=models.CASCADE, related_name="instructor_courses", null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
     # Payment info
