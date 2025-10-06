@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Course, Enrollment
+from .models import Course, Enrollment, Assessment, Submission, SponsorProfile, Sponsorship, Transaction, Notification
 from django.contrib.auth.models import User, Group
 from django.contrib.auth.hashers import make_password
 
@@ -65,3 +65,20 @@ class GroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = Group
         fields = ['id', 'name']
+
+
+# for Assessment model
+class AssessmentSerializer(serializers.ModelSerializer):
+    """
+    Serializer for the Assessment model.
+    Adds read-only course name for easier API responses.
+    """
+   
+    course_name = serializers.CharField(source="course.name", read_only=True)
+
+    class Meta:
+        model = Assessment
+        fields = ["id", "course", "course_name", "title", "description", "due_date"]
+        read_only_fields = ["id", "course_name"]
+
+
