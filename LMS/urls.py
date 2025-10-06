@@ -31,4 +31,6 @@ urlpatterns = [
     path("register/", UserViewSet.as_view({"post": "register"})),
     path("login/", UserViewSet.as_view({"post": "login"})),
     path("groups/", GroupApiViewSet.as_view({"get": "list"})),
+#    path("enrollments/<int:pk>/update_progress/", EnrollmentViewSet.as_view({"patch": "update_progress"})),
+
 ]+ router.urls

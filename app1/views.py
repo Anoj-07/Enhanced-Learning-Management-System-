@@ -157,7 +157,7 @@ class EnrollmentViewSet(ModelViewSet):
 
         serializer.save(student=user)
 
-    # @action(detail=True, methods=["patch"])
+    @action(detail=True, methods=['patch'], url_path='update_progress')
     def update_progress(self, request, pk=None):
         """
         PATCH /enrollments/{id}/update_progress/

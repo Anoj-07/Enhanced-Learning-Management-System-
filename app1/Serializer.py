@@ -11,7 +11,7 @@ class CourseSerializer(serializers.ModelSerializer):
 
 
 class EnrollmentSerializer(serializers.ModelSerializer):
-    student_username = serializers.CharField(source="student.username", read_only=True)
+    student_first_name = serializers.CharField(source="student.first_name", read_only=True)
     course_name = serializers.CharField(source="course.name", read_only=True)
 
     class Meta:
@@ -19,7 +19,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "student",
-            "student_username",
+            "student_first_name",
             "course",
             "course_name",
             "progress",
@@ -36,11 +36,11 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         user = request.user
         course = validated_data["course"]
 
-        # Check if already enrolled
+        # Prevent duplicate enrollments
         if Enrollment.objects.filter(student=user, course=course).exists():
             raise serializers.ValidationError("You are already enrolled in this course.")
 
-        enrollment = Enrollment.objects.create(student=user, **validated_data)
+        enrollment = Enrollment.objects.create(**validated_data)
         return enrollment
 
 
