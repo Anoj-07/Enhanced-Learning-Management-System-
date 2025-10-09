@@ -1,7 +1,7 @@
 from django.shortcuts import render
-from rest_framework.permissions import IsAuthenticated, AllowAny, DjangoModelPermissions
+from rest_framework.permissions import IsAuthenticated, AllowAny, DjangoModelPermissions, BasePermission
 from rest_framework.viewsets import ModelViewSet, GenericViewSet, ReadOnlyModelViewSet
-from .models import Course, Enrollment, Assessment
+from .models import Course, Enrollment, Assessment, Submission, SponsorProfile
 from .Serializer import (
     CourseSerializer,
     EnrollmentSerializer,
@@ -9,37 +9,96 @@ from .Serializer import (
     GroupSerializer,
     UserSerializer,
     AssessmentSerializer,
+    SubmissionSerializer,
+    SponsorProfileSerializer,
 )
 from django.contrib.auth import authenticate
-from rest_framework.exceptions import APIException
+from rest_framework.exceptions import APIException,PermissionDenied
 from .ai import generate_course_description
 from django.contrib.auth.models import User, Group
 from rest_framework.authtoken.models import Token
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-
 # Create your views here.
 
 
-# view to create a course
+# view or create a course
 class CourseViewSet(ModelViewSet):
+    """
+    Course CRUD API with role-based access:
+    - Instructor: Can create, update, view their own courses.
+    - Admin: Can create, update, delete, and view all courses.
+    - Student: Can only view courses (enrolled or all).
+    - Sponsor: Can only view courses.
+    
+    AI Description:
+    - Automatically generates course description if not provided.
+    """
+
     queryset = Course.objects.all()
     serializer_class = CourseSerializer
+    permission_classes = [IsAuthenticated, DjangoModelPermissions]
 
-    # for Ai Description
+    def get_queryset(self):
+        """
+        Filter courses based on user role:
+        - Instructor: only their courses
+        - Student: all courses (optionally filter enrolled courses)
+        - Sponsor: all courses (optionally filter sponsored courses)
+        - Admin: all courses
+        """
+        user = self.request.user
+
+        # Instructor sees only their courses
+        if user.groups.filter(name="Instructor").exists():
+            return Course.objects.filter(instructor=user)
+
+        # Student can see all courses (can be filtered for enrolled courses if needed)
+        elif user.groups.filter(name="Student").exists():
+            return Course.objects.all()
+
+        # Sponsor can see all courses (or filter sponsored courses)
+        elif user.groups.filter(name="Sponsor").exists():
+            return Course.objects.all()
+
+        # Admin sees all courses
+        elif user.groups.filter(name="Admin").exists() or user.is_staff:
+            return Course.objects.all()
+
+        # Default: no access
+        return Course.objects.none()
+
     def perform_create(self, serializer):
+        """
+        Handles course creation:
+        1. Automatically assigns logged-in instructor.
+        2. Generates AI description if not provided.
+        """
+        user = self.request.user
+
+        # Only instructors and admins can create courses
+        if not (
+            user.groups.filter(name="Instructor").exists()
+            or user.groups.filter(name="Admin").exists()
+            or user.is_staff
+        ):
+            raise PermissionDenied("You do not have permission to create a course.")
+
         name = serializer.validated_data.get("name")
-        description = serializer.validated_data.get("description")
         difficulty_level = serializer.validated_data.get("difficulty_level")
+        description = serializer.validated_data.get("description")
 
         try:
+            # Generate AI description if empty
             if not description:
                 description = generate_course_description(name, difficulty_level)
 
-            serializer.save(description=description)
+            # Save course with instructor and description
+            serializer.save(instructor=user, description=description)
+
         except Exception as e:
-            raise APIException(f"Error generating description: {str(e)}")
+            raise APIException(f"Error generating course description: {str(e)}")
 
 
 # -----------------------------
@@ -114,12 +173,27 @@ class GroupApiViewSet(ReadOnlyModelViewSet):
 
     queryset = Group.objects.all()
     serializer_class = GroupSerializer
-    permission_classes = [DjangoModelPermissions]
+    permission_classes = []
 
 
 # -----------------------------
 # Enrollment API
 # -----------------------------
+
+
+# class for custom permission
+class IsStudentOrAdmin(BasePermission):
+    """
+    Allow student to update their own enrollment, or admin/staff to update any.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if not user.is_authenticated:
+            return False
+        return obj.student == user or user.is_staff or user.groups.filter(name="Admin").exists()
+    
+
 class EnrollmentViewSet(ModelViewSet):
     """
     Handles course enrollments.
@@ -128,7 +202,8 @@ class EnrollmentViewSet(ModelViewSet):
     """
 
     serializer_class = EnrollmentSerializer
-    permission_classes = [IsAuthenticated]  # Must be logged in
+    permission_classes = [IsAuthenticated, DjangoModelPermissions]  # Must be logged in # this is for permission
+
 
     def get_queryset(self):
         user = self.request.user
@@ -151,47 +226,33 @@ class EnrollmentViewSet(ModelViewSet):
         """
         user = self.request.user
         if user.is_anonymous or not user.groups.filter(name="Student").exists():
-            from rest_framework.exceptions import PermissionDenied
 
             raise PermissionDenied("Only authenticated students can enroll in courses.")
 
         serializer.save(student=user)
+    
+    
 
-    @action(detail=True, methods=['patch'], url_path='update_progress')
+    @action(detail=True, methods=['patch'], url_path='update_progress', permission_classes=[IsStudentOrAdmin])
     def update_progress(self, request, pk=None):
-        """
-        PATCH /enrollments/{id}/update_progress/
-        Allows a student to update their progress in a course (0-100)
-        """
-        enrollment = self.get_object()
+            enrollment = self.get_object()
 
-        # Only the student or admin can update progress
-        user = request.user
-        if user != enrollment.student and not (
-            user.groups.filter(name="Admin").exists() or user.is_staff
-        ):
-            from rest_framework.exceptions import PermissionDenied
+            # Validate progress
+            progress = request.data.get("progress")
+            try:
+                progress = float(progress)
+            except (ValueError, TypeError):
+                return Response({"error": "Progress must be a number"}, status=status.HTTP_400_BAD_REQUEST)
 
-            raise PermissionDenied("You cannot update progress for this enrollment.")
+            if not (0 <= progress <= 100):
+                return Response({"error": "Progress must be between 0 and 100"}, status=status.HTTP_400_BAD_REQUEST)
 
-        progress = request.data.get("progress")
-        try:
-            progress = float(progress)
-        except (ValueError, TypeError):
-            return Response(
-                {"error": "Progress must be a number"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            enrollment.progress = progress
+            enrollment.save()
+            return Response({"message": "Progress updated successfully"})
 
-        if not (0 <= progress <= 100):
-            return Response(
-                {"error": "Progress must be between 0 and 100"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
 
-        enrollment.progress = progress
-        enrollment.save()
-        return Response({"message": "Progress updated successfully"})
+
 
 
 # class for Assessement
@@ -203,7 +264,8 @@ class AssessmentViewSet(ModelViewSet):
     """
     queryset = Assessment.objects.all()
     serializer_class = AssessmentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, DjangoModelPermissions]  # Must be logged in # this is for permission
+
 
     def perform_create(self, serializer):
         """
@@ -238,3 +300,110 @@ class AssessmentViewSet(ModelViewSet):
             return Assessment.objects.filter(course__course_enrollments__student=user)
         else:
             return Assessment.objects.none()
+
+
+# custom role for  Submission ViewSet
+class IsInstructorOrAdmin(BasePermission):
+    """
+    Allows access only to Instructors (who own the course) or Admin/Staff users.
+    """
+
+    def has_permission(self, request, view):
+        # Must be authenticated first
+        return request.user and request.user.is_authenticated
+
+    def has_object_permission(self, request, view, obj):
+        """
+        Object-level check:
+        - Instructor can grade only submissions for their own course's assessment.
+        - Admin/Staff can grade any.
+        """
+        user = request.user
+
+        # Check if user is Admin or staff
+        if user.is_staff or user.groups.filter(name="Admin").exists():
+            return True
+
+        # Check if user is instructor of the related course
+        return user.groups.filter(name="Instructor").exists() and obj.assessment.course.instructor == user
+
+class SubmissionViewSet(ModelViewSet):
+    queryset = Submission.objects.all()
+    serializer_class = SubmissionSerializer
+    permission_classes = [IsAuthenticated, DjangoModelPermissions]  # Must be logged in # this is for permission
+
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.groups.filter(name="Admin").exists() or user.is_staff:
+            return Submission.objects.all()
+        elif user.groups.filter(name="Instructor").exists():
+            return Submission.objects.filter(assessment__course__instructor=user)
+        elif user.groups.filter(name="Student").exists():
+            return Submission.objects.filter(student=user)
+        return Submission.objects.none()
+    
+
+    @action(detail=True, methods=["patch"], permission_classes=[IsInstructorOrAdmin])
+    def grade_submission(self, request, pk=None):
+        """
+        PATCH /submissions/{id}/grade_submission/
+        Allows Instructor or Admin to grade a student's submission.
+        """
+        submission = self.get_object()
+        grade = request.data.get("grade")
+
+        try:
+            grade = float(grade)
+        except (ValueError, TypeError):
+            return Response({"error": "Grade must be a numeric value"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not (0 <= grade <= 100):
+            return Response({"error": "Grade must be between 0 and 100"}, status=status.HTTP_400_BAD_REQUEST)
+
+        submission.grade = grade
+        submission.save()
+
+        return Response(
+            {"message": "Submission graded successfully", "grade": submission.grade},
+            status=status.HTTP_200_OK
+        )
+
+
+# SponsorProfile viewset
+class SponsorProfileViewSet(ModelViewSet):
+    """
+    API endpoint for managing Sponsor Profiles.
+    - Sponsors can create and view their own profile.
+    - Admins can view and manage all profiles.
+    """
+
+    queryset = SponsorProfile.objects.all()
+    serializer_class = SponsorProfileSerializer
+    permission_classes = [IsAuthenticated, DjangoModelPermissions]
+
+    def get_queryset(self):
+        """
+        Filter sponsor data based on user role:
+        - Admin: See all sponsor profiles.
+        - Sponsor: See only their own profile.
+        """
+        user = self.request.user
+
+        if user.is_staff or user.groups.filter(name="Admin").exists():
+            return SponsorProfile.objects.all()
+        elif user.groups.filter(name="Sponsor").exists():
+            return SponsorProfile.objects.filter(sponsor=user)
+        return SponsorProfile.objects.none()
+
+    def perform_create(self, serializer):
+        """
+        Automatically attach the logged-in sponsor to the created profile.
+        """
+        user = self.request.user
+
+        # Only sponsors can create profiles
+        if not user.groups.filter(name="Sponsor").exists():
+            raise PermissionDenied("Only sponsors can create sponsor profiles.")
+
+        serializer.save(sponsor=user)

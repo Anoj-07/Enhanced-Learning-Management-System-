@@ -81,4 +81,65 @@ class AssessmentSerializer(serializers.ModelSerializer):
         fields = ["id", "course", "course_name", "title", "description", "due_date"]
         read_only_fields = ["id", "course_name"]
 
+from rest_framework import serializers
+from .models import Submission
 
+class SubmissionSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="student.first_name", read_only=True)
+    assessment_title = serializers.CharField(source="assessment.title", read_only=True)
+
+    class Meta:
+        model = Submission
+        fields = [
+            "id",
+            "assessment",
+            "assessment_title",
+            "student",
+            "student_name",
+            "submitted_file",
+            "submitted_at",
+            "grade",
+        ]
+        read_only_fields = ["submitted_at", "student", "grade"]
+
+    def create(self, validated_data):
+        """
+        Automatically assign the logged-in user as the student.
+        """
+        request = self.context.get("request")
+        user = request.user
+
+        validated_data["student"] = user
+        return super().create(validated_data)
+
+# SponsorProfile Serializer
+class SponsorProfileSerializer(serializers.ModelSerializer):
+    """
+    Serializer for SponsorProfile model.
+    Handles sponsor-specific data such as organization name and total funds.
+    """
+
+    sponsor_username = serializers.CharField(source="sponsor.username", read_only=True)
+    sponsor_email = serializers.CharField(source="sponsor.email", read_only=True)
+
+    class Meta:
+        model = SponsorProfile
+        fields = [
+            "id",
+            "sponsor",
+            "sponsor_username",
+            "sponsor_email",
+            "organization_name",
+            "total_funds",
+        ]
+        read_only_fields = ["sponsor"]
+
+    def create(self, validated_data):
+        """
+        Automatically link the logged-in sponsor to their profile.
+        Prevents duplicate profiles.
+        """
+        validated_data.pop('sponsor', None)
+        user = self.context['request'].user
+        profile = SponsorProfile.objects.create(sponsor=user, **validated_data)
+        return profile

@@ -68,6 +68,14 @@ class Assessment(models.Model):
 class Submission(models.Model):
     """
     Student submissions for assessments.
+    Represents a student's submission for a specific assessment.
+
+    This model stores the details of a student's submission, including:
+    - The related assessment.
+    - The student who submitted it.
+    - The submitted file (if any).
+    - The submission timestamp.
+    - The grade assigned (if evaluated).
     """
     assessment = models.ForeignKey(Assessment, on_delete=models.CASCADE, related_name="submissions")
     student = models.ForeignKey(User, on_delete=models.CASCADE, related_name="student_submissions")

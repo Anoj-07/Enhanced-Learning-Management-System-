@@ -16,7 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from app1.views import CourseViewSet, EnrollmentViewSet, UserViewSet, GroupApiViewSet, AssessmentViewSet
+from app1.views import CourseViewSet, EnrollmentViewSet, UserViewSet, GroupApiViewSet, AssessmentViewSet, SubmissionViewSet, SponsorProfileViewSet
 from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
@@ -24,6 +24,8 @@ router.register(r'users', UserViewSet, basename='user')
 router.register(r"courses", CourseViewSet, basename='course')
 router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
 router.register(r"assessments", AssessmentViewSet, basename='assessment')
+router.register(r"submissions", SubmissionViewSet, basename='submission')
+router.register(r"sponsor-profiles", SponsorProfileViewSet, basename='sponsorprofile')
 
 
 urlpatterns = [
