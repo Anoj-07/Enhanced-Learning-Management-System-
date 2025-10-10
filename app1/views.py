@@ -1,7 +1,7 @@
 from django.shortcuts import render
 from rest_framework.permissions import IsAuthenticated, AllowAny, DjangoModelPermissions, BasePermission
 from rest_framework.viewsets import ModelViewSet, GenericViewSet, ReadOnlyModelViewSet
-from .models import Course, Enrollment, Assessment, Submission, SponsorProfile
+from .models import Course, Enrollment, Assessment, Submission, SponsorProfile, SponsorTransaction, Sponsorship
 from .Serializer import (
     CourseSerializer,
     EnrollmentSerializer,
@@ -11,19 +11,23 @@ from .Serializer import (
     AssessmentSerializer,
     SubmissionSerializer,
     SponsorProfileSerializer,
+    SponsorshipSerializer,
 )
 from django.contrib.auth import authenticate
-from rest_framework.exceptions import APIException,PermissionDenied
+from rest_framework.exceptions import APIException,PermissionDenied, ValidationError
 from .ai import generate_course_description
 from django.contrib.auth.models import User, Group
 from rest_framework.authtoken.models import Token
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from decimal import Decimal, InvalidOperation
+
+
 # Create your views here.
 
 
-# view or create a course
+# view or create a course --------------------------------------------------------------
 class CourseViewSet(ModelViewSet):
     """
     Course CRUD API with role-based access:
@@ -102,7 +106,7 @@ class CourseViewSet(ModelViewSet):
 
 
 # -----------------------------
-# User API (Register + Login)
+# User API (Register + Login) --------------------------------------------------------------------
 # -----------------------------
 class UserViewSet(GenericViewSet):
     """
@@ -175,13 +179,10 @@ class GroupApiViewSet(ReadOnlyModelViewSet):
     serializer_class = GroupSerializer
     permission_classes = []
 
-
 # -----------------------------
 # Enrollment API
 # -----------------------------
-
-
-# class for custom permission
+# class for custom permission for EnrollmentViewSet -------------------------------------------------------
 class IsStudentOrAdmin(BasePermission):
     """
     Allow student to update their own enrollment, or admin/staff to update any.
@@ -193,7 +194,6 @@ class IsStudentOrAdmin(BasePermission):
             return False
         return obj.student == user or user.is_staff or user.groups.filter(name="Admin").exists()
     
-
 class EnrollmentViewSet(ModelViewSet):
     """
     Handles course enrollments.
@@ -251,11 +251,7 @@ class EnrollmentViewSet(ModelViewSet):
             enrollment.save()
             return Response({"message": "Progress updated successfully"})
 
-
-
-
-
-# class for Assessement
+# class for Assessement -----------------------------------------------------
 class AssessmentViewSet(ModelViewSet):
     """
     Handles CRUD operations for Assessments.
@@ -302,7 +298,7 @@ class AssessmentViewSet(ModelViewSet):
             return Assessment.objects.none()
 
 
-# custom role for  Submission ViewSet
+# custom role for  Submission ViewSet ----------------------------------------------
 class IsInstructorOrAdmin(BasePermission):
     """
     Allows access only to Instructors (who own the course) or Admin/Staff users.
@@ -370,7 +366,7 @@ class SubmissionViewSet(ModelViewSet):
         )
 
 
-# SponsorProfile viewset
+# SponsorProfile viewset ------------------------------------------------------------
 class SponsorProfileViewSet(ModelViewSet):
     """
     API endpoint for managing Sponsor Profiles.
@@ -407,3 +403,162 @@ class SponsorProfileViewSet(ModelViewSet):
             raise PermissionDenied("Only sponsors can create sponsor profiles.")
 
         serializer.save(sponsor=user)
+    
+
+# To update funds incrementally
+# inside SponsorProfileViewSet
+
+    @action(detail=True, methods=["patch"], url_path="add-funds")
+    def add_funds(self, request, pk=None):
+        sponsor_profile = self.get_object()
+        amount = request.data.get("amount") or request.data.get("total_funds")
+
+        try:
+            amount = Decimal(str(amount))
+        except (ValueError, TypeError, InvalidOperation):
+            return Response(
+                {"error": "Please provide a valid positive number for 'amount'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if amount <= 0:
+            return Response(
+                {"error": "Amount must be a positive number."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sponsor_profile.total_funds += amount
+        sponsor_profile.save()
+
+        # ✅ Record transaction
+        SponsorTransaction.objects.create(
+            sponsor=sponsor_profile.sponsor,
+            transaction_type="ADD",
+            amount=amount,
+            balance_after=sponsor_profile.total_funds,
+            description=f"Added {amount} funds."
+        )
+
+        return Response({
+            "message": f"Successfully added {amount} to sponsor funds.",
+            "total_funds": str(sponsor_profile.total_funds)
+        })
+
+
+    @action(detail=True, methods=["patch"], url_path="deduct-funds")
+    def deduct_funds(self, request, pk=None):
+        sponsor_profile = self.get_object()
+        amount = request.data.get("amount")
+
+        try:
+            amount = Decimal(str(amount))
+        except (ValueError, TypeError, InvalidOperation):
+            return Response(
+                {"error": "Please provide a valid positive number for 'amount'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if amount <= 0:
+            return Response(
+                {"error": "Amount must be a positive number."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if sponsor_profile.total_funds < amount:
+            return Response(
+                {"error": "Insufficient funds to deduct this amount."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sponsor_profile.total_funds -= amount
+        sponsor_profile.save()
+
+        # ✅ Record transaction
+        SponsorTransaction.objects.create(
+            sponsor=sponsor_profile.sponsor,
+            transaction_type="DEDUCT",
+            amount=amount,
+            balance_after=sponsor_profile.total_funds,
+            description=f"Deducted {amount} funds."
+        )
+
+        return Response({
+            "message": f"Successfully deducted {amount} from sponsor funds.",
+            "total_funds": str(sponsor_profile.total_funds)
+        })
+
+
+    @action(detail=True, methods=["get"], url_path="transactions")
+    def view_transactions(self, request, pk=None):
+        """
+        GET /sponsorprofiles/{id}/transactions/
+
+        Returns a list of all transactions for this sponsor.
+        """
+        sponsor_profile = self.get_object()
+        transactions = SponsorTransaction.objects.filter(sponsor=sponsor_profile.sponsor)
+        data = [
+            {
+                "type": t.transaction_type,
+                "amount": str(t.amount),
+                "balance_after": str(t.balance_after),
+                "timestamp": t.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                "description": t.description,
+            }
+            for t in transactions
+        ]
+        return Response(data)
+
+# View for SponsorShip model ------------------------------------------------------
+class SponsorshipViewSet(ModelViewSet):
+    """
+    Manage sponsorships between sponsors and students.
+    Sponsors can create sponsorships for students/courses they fund.
+    Admins can view and manage all sponsorships.
+    """
+
+    queryset = Sponsorship.objects.all()
+    serializer_class = SponsorshipSerializer
+    permission_classes = [IsAuthenticated, DjangoModelPermissions]
+
+    def get_queryset(self):
+        user = self.request.user
+        # Admins see all
+        if user.is_staff or user.groups.filter(name="Admin").exists():
+            return Sponsorship.objects.all()
+        # Sponsors see their own sponsorships
+        elif user.groups.filter(name="Sponsor").exists():
+            return Sponsorship.objects.filter(sponsor__sponsor=user)
+        return Sponsorship.objects.none()
+
+    def perform_create(self, serializer):
+        """
+        Automatically attach the logged-in sponsor's SponsorProfile to the sponsorship.
+        Deducts funds automatically.
+        """
+        user = self.request.user
+
+        # ✅ Get sponsor profile
+        try:
+            sponsor_profile = SponsorProfile.objects.get(sponsor=user)
+        except SponsorProfile.DoesNotExist:
+            raise PermissionDenied("You must have a SponsorProfile to create sponsorships.")
+
+        sponsorship = serializer.save(sponsor=sponsor_profile)
+
+        # ✅ Deduct amount from funds
+        if sponsor_profile.total_funds < sponsorship.amount:
+            raise ValidationError("Insufficient funds for this sponsorship.")
+
+        sponsor_profile.total_funds -= sponsorship.amount
+        sponsor_profile.save()
+
+        # ✅ Record transaction
+        SponsorTransaction.objects.create(
+            sponsor=user,
+            transaction_type="DEDUCT",
+            amount=sponsorship.amount,
+            balance_after=sponsor_profile.total_funds,
+            description=f"Sponsorship for {sponsorship.student.username}"
+        )
+

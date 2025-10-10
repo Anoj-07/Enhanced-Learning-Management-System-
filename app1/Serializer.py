@@ -3,13 +3,16 @@ from .models import Course, Enrollment, Assessment, Submission, SponsorProfile, 
 from django.contrib.auth.models import User, Group
 from django.contrib.auth.hashers import make_password
 
+
+
+# Course Serializer ------------------------------------------------
 class CourseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Course
         fields = '__all__'
         read_only_fields = ['created_at']
 
-
+# Enrollment Serializer ------------------------------------------------
 class EnrollmentSerializer(serializers.ModelSerializer):
     student_first_name = serializers.CharField(source="student.first_name", read_only=True)
     course_name = serializers.CharField(source="course.name", read_only=True)
@@ -44,7 +47,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
         return enrollment
 
 
-# Login and Register
+# Login and Register -------------------------------------------------
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -60,14 +63,14 @@ class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField()
 
-
+# for Group model ------------------------------------------------
 class GroupSerializer(serializers.ModelSerializer):
     class Meta:
         model = Group
         fields = ['id', 'name']
 
 
-# for Assessment model
+# for Assessment model ------------------------------------------------
 class AssessmentSerializer(serializers.ModelSerializer):
     """
     Serializer for the Assessment model.
@@ -81,9 +84,7 @@ class AssessmentSerializer(serializers.ModelSerializer):
         fields = ["id", "course", "course_name", "title", "description", "due_date"]
         read_only_fields = ["id", "course_name"]
 
-from rest_framework import serializers
-from .models import Submission
-
+# for Submission model ------------------------------------------------
 class SubmissionSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source="student.first_name", read_only=True)
     assessment_title = serializers.CharField(source="assessment.title", read_only=True)
@@ -112,7 +113,7 @@ class SubmissionSerializer(serializers.ModelSerializer):
         validated_data["student"] = user
         return super().create(validated_data)
 
-# SponsorProfile Serializer
+# SponsorProfile Serializer ------------------------------------------------
 class SponsorProfileSerializer(serializers.ModelSerializer):
     """
     Serializer for SponsorProfile model.
@@ -143,3 +144,60 @@ class SponsorProfileSerializer(serializers.ModelSerializer):
         user = self.context['request'].user
         profile = SponsorProfile.objects.create(sponsor=user, **validated_data)
         return profile
+    
+
+# Sponsorship Serializer ------------------------------------------------
+class SponsorshipSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Sponsorship model.
+    Automatically attaches sponsor based on the logged-in user.
+    Prevents other roles from creating sponsorships.
+    """
+    sponsor_name = serializers.CharField(source="sponsor.sponsor.username", read_only=True)
+    student_name = serializers.CharField(source="student.username", read_only=True)
+    course_name = serializers.CharField(source="course.name", read_only=True)
+
+    class Meta:
+        model = Sponsorship
+        fields = [
+            "id",
+            "sponsor",          # sponsor profile object (read-only)
+            "sponsor_name",     # username of sponsor
+            "student",          # student being sponsored
+            "student_name",     # username of student
+            "course",           # optional course
+            "course_name",      # name of the course
+            "amount",           # sponsorship amount
+            "created_at",       # timestamp
+        ]
+        read_only_fields = [
+            "created_at",
+            "sponsor",
+            "sponsor_name",
+            "student_name",
+            "course_name"
+        ]
+
+    def create(self, validated_data):
+        """
+        Automatically link the sponsor to the logged-in user.
+        Ensures only sponsors can create sponsorships.
+        """
+        request = self.context.get("request")
+        user = request.user
+
+        # ✅ Only sponsors can create sponsorships
+        if not user.groups.filter(name="Sponsor").exists():
+            raise serializers.ValidationError("Only sponsors can create sponsorships.")
+
+        # ✅ Get sponsor profile
+        sponsor_profile = getattr(user, "sponsor_profile", None)
+        if sponsor_profile is None:
+            raise serializers.ValidationError("Sponsor profile not found for this user.")
+
+        # ✅ Attach sponsor automatically
+        validated_data["sponsor"] = sponsor_profile
+
+        return super().create(validated_data)
+
+

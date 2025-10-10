@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from decimal import Decimal
 
 # Create your models here.
 # profile model for Admin, Instructor, student, sponsor
@@ -154,8 +155,9 @@ class Transaction(models.Model):
         ("Cash", "Cash"),
     ]
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="transactions")
-    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="transactions")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="user_transactions")
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="course_transactions", blank=True, null=True,
+                               help_text="If this payment is for a course")
     sponsorship = models.ForeignKey(
         "Sponsorship",
         on_delete=models.SET_NULL,
@@ -174,3 +176,35 @@ class Transaction(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.amount} via {self.payment_method} ({self.status})"
+
+
+class SponsorTransaction(models.Model):
+    """
+    Records each fund transaction made by a sponsor.
+
+    ✅ Fields:
+    - sponsor: Reference to the sponsor user.
+    - transaction_type: ADD or DEDUCT.
+    - amount: Decimal value for transaction amount.
+    - balance_after: Balance after the transaction.
+    - timestamp: Auto-generated timestamp for transaction.
+    - description: Optional field for notes.
+    """
+
+    TRANSACTION_TYPES = (
+        ('ADD', 'Add Funds'),
+        ('DEDUCT', 'Deduct Funds'),
+    )
+
+    sponsor = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sponsor_transactions")
+    transaction_type = models.CharField(max_length=10, choices=TRANSACTION_TYPES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    balance_after = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    description = models.TextField(blank=True, null=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.sponsor.username} - {self.transaction_type} - {self.amount}"
+
+    class Meta:
+        ordering = ['-timestamp']
