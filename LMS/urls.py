@@ -15,7 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.urls import path, include
 from app1.views import CourseViewSet, EnrollmentViewSet, UserViewSet, GroupApiViewSet, AssessmentViewSet, SubmissionViewSet, SponsorProfileViewSet, SponsorshipViewSet
 from rest_framework.routers import DefaultRouter
 
@@ -36,5 +36,7 @@ urlpatterns = [
     path("login/", UserViewSet.as_view({"post": "login"})),
     path("groups/", GroupApiViewSet.as_view({"get": "list"})),
 #    path("enrollments/<int:pk>/update_progress/", EnrollmentViewSet.as_view({"patch": "update_progress"})),
+
+    path('analytics/', include('analytics.urls')),
 
 ]+ router.urls

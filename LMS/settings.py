@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 from pathlib import Path
 from dotenv import load_dotenv
+from decouple import config
 load_dotenv()
 
 import os
@@ -46,6 +47,9 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'app1',
+    'analytics',
+
+
     'rest_framework',
      "rest_framework.authtoken",
 ]
@@ -87,11 +91,11 @@ WSGI_APPLICATION = 'LMS.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'LMS',           # your database name
-        'USER': 'postgres',         # your database user
-        'PASSWORD': 'Password', # your password
-        'HOST': 'localhost',        # or your DB host
-        'PORT': '5432',             # default PostgreSQL port
+        'NAME': config('DB_NAME'),
+        'USER': config('DB_USER'),
+        'PASSWORD': config('DB_PASSWORD'),
+        'HOST': config('DB_HOST'),
+        'PORT': config('DB_PORT'),
     }
 }
 
