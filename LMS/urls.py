@@ -14,29 +14,42 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+
 from django.contrib import admin
 from django.urls import path, include
-from app1.views import CourseViewSet, EnrollmentViewSet, UserViewSet, GroupApiViewSet, AssessmentViewSet, SubmissionViewSet, SponsorProfileViewSet, SponsorshipViewSet
+from app1.views import (
+    CourseViewSet,
+    EnrollmentViewSet,
+    UserViewSet,
+    GroupApiViewSet,
+    AssessmentViewSet,
+    SubmissionViewSet,
+    SponsorProfileViewSet,
+    SponsorshipViewSet,
+    InstructorNotificationViewSet,
+)
 from rest_framework.routers import DefaultRouter
 
 router = DefaultRouter()
-router.register(r'users', UserViewSet, basename='user')
-router.register(r"courses", CourseViewSet, basename='course')
-router.register(r'enrollments', EnrollmentViewSet, basename='enrollment')
-router.register(r"assessments", AssessmentViewSet, basename='assessment')
-router.register(r"submissions", SubmissionViewSet, basename='submission')
-router.register(r"sponsor-profiles", SponsorProfileViewSet, basename='sponsorprofile')
-router.register(r'sponsorships', SponsorshipViewSet, basename='sponsorship')
-
+router.register(r"users", UserViewSet, basename="user")
+router.register(r"courses", CourseViewSet, basename="course")
+router.register(r"enrollments", EnrollmentViewSet, basename="enrollment")
+router.register(r"assessments", AssessmentViewSet, basename="assessment")
+router.register(r"submissions", SubmissionViewSet, basename="submission")
+router.register(r"sponsor-profiles", SponsorProfileViewSet, basename="sponsorprofile")
+router.register(r"sponsorships", SponsorshipViewSet, basename="sponsorship")
+router.register(
+    r"instructor-notifications",
+    InstructorNotificationViewSet,
+    basename="instructor-notifications",
+)
 
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path("admin/", admin.site.urls),
     path("register/", UserViewSet.as_view({"post": "register"})),
     path("login/", UserViewSet.as_view({"post": "login"})),
     path("groups/", GroupApiViewSet.as_view({"get": "list"})),
-#    path("enrollments/<int:pk>/update_progress/", EnrollmentViewSet.as_view({"patch": "update_progress"})),
-
-    path('analytics/', include('analytics.urls')),
-
-]+ router.urls
+    #    path("enrollments/<int:pk>/update_progress/", EnrollmentViewSet.as_view({"patch": "update_progress"})),
+    path("analytics/", include("analytics.urls")),
+] + router.urls

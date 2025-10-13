@@ -51,7 +51,7 @@ INSTALLED_APPS = [
 
 
     'rest_framework',
-     "rest_framework.authtoken",
+    "rest_framework.authtoken",
 ]
 
 MIDDLEWARE = [
@@ -140,6 +140,31 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+# LMS/settings.py
+
+# Email Configuration (for testing)
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+# DEFAULT_FROM_EMAIL = 'noreply@lms.com'
+# settings.py
+
+# 1. Specify the email backend
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+
+# 2. Gmail SMTP server details
+EMAIL_HOST = config('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_USE_TLS = True  # Use Transport Layer Security for a secure connection
+# 3. Your Gmail credentials
+# **Crucial: Use the App Password you generated, NOT your regular Gmail password.**
+EMAIL_HOST_USER =  config('EMAIL_HOST_USER') # Replace with your Gmail address
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD') # Replace with your App Password
+
+# 4. Default sender address for emails
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+
 
 
 REST_FRAMEWORK = {

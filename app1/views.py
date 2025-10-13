@@ -1,7 +1,26 @@
 from django.shortcuts import render
-from rest_framework.permissions import IsAuthenticated, AllowAny, DjangoModelPermissions, BasePermission
-from rest_framework.viewsets import ModelViewSet, GenericViewSet, ReadOnlyModelViewSet
-from .models import Course, Enrollment, Assessment, Submission, SponsorProfile, SponsorTransaction, Sponsorship
+from rest_framework.permissions import (
+    IsAuthenticated,
+    AllowAny,
+    DjangoModelPermissions,
+    BasePermission,
+)
+from rest_framework.viewsets import (
+    ModelViewSet,
+    GenericViewSet,
+    ReadOnlyModelViewSet,
+    ViewSet,
+)
+from .models import (
+    Course,
+    Enrollment,
+    Assessment,
+    Submission,
+    SponsorProfile,
+    SponsorTransaction,
+    Sponsorship,
+    Notification,
+)
 from .Serializer import (
     CourseSerializer,
     EnrollmentSerializer,
@@ -14,14 +33,15 @@ from .Serializer import (
     SponsorshipSerializer,
 )
 from django.contrib.auth import authenticate
-from rest_framework.exceptions import APIException,PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from .ai import generate_course_description
 from django.contrib.auth.models import User, Group
 from rest_framework.authtoken.models import Token
 from rest_framework import permissions, status
 from rest_framework.response import Response
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from decimal import Decimal, InvalidOperation
+from .utils import simulate_payment
 
 
 # Create your views here.
@@ -35,7 +55,7 @@ class CourseViewSet(ModelViewSet):
     - Admin: Can create, update, delete, and view all courses.
     - Student: Can only view courses (enrolled or all).
     - Sponsor: Can only view courses.
-    
+
     AI Description:
     - Automatically generates course description if not provided.
     """
@@ -134,7 +154,6 @@ class UserViewSet(GenericViewSet):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-      
 
     def login(self, request):
         """
@@ -170,6 +189,7 @@ class UserViewSet(GenericViewSet):
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
 class GroupApiViewSet(ReadOnlyModelViewSet):
     """
     API endpoint to manage user groups.
@@ -178,6 +198,7 @@ class GroupApiViewSet(ReadOnlyModelViewSet):
     queryset = Group.objects.all()
     serializer_class = GroupSerializer
     permission_classes = []
+
 
 # -----------------------------
 # Enrollment API
@@ -192,8 +213,13 @@ class IsStudentOrAdmin(BasePermission):
         user = request.user
         if not user.is_authenticated:
             return False
-        return obj.student == user or user.is_staff or user.groups.filter(name="Admin").exists()
-    
+        return (
+            obj.student == user
+            or user.is_staff
+            or user.groups.filter(name="Admin").exists()
+        )
+
+
 class EnrollmentViewSet(ModelViewSet):
     """
     Handles course enrollments.
@@ -202,8 +228,10 @@ class EnrollmentViewSet(ModelViewSet):
     """
 
     serializer_class = EnrollmentSerializer
-    permission_classes = [IsAuthenticated, DjangoModelPermissions]  # Must be logged in # this is for permission
-
+    permission_classes = [
+        IsAuthenticated,
+        DjangoModelPermissions,
+    ]  # Must be logged in # this is for permission
 
     def get_queryset(self):
         user = self.request.user
@@ -220,36 +248,114 @@ class EnrollmentViewSet(ModelViewSet):
             return Enrollment.objects.none()
 
     def perform_create(self, serializer):
-        """
-        Automatically attach logged-in student.
-        Prevents anonymous users from creating enrollments.
-        """
         user = self.request.user
         if user.is_anonymous or not user.groups.filter(name="Student").exists():
-
             raise PermissionDenied("Only authenticated students can enroll in courses.")
 
+        course = serializer.validated_data.get("course")
+        if not course:
+            raise ValidationError("Course must be provided.")
+
+        # Prevent duplicate enrollment
+        if Enrollment.objects.filter(student=user, course=course).exists():
+            raise ValidationError("You are already enrolled in this course.")
+
+        # Paid course check: is_paid True OR price > 0
+        if course.is_paid or course.price > 0:
+            # Check if student has sponsorship for this course
+            has_sponsorship = Sponsorship.objects.filter(
+                student=user, course=course
+            ).exists()
+            # Check if student has completed payment for this course
+            has_payment = course.course_transactions.filter(
+                user=user, status="Completed"
+            ).exists()
+            if not (has_sponsorship or has_payment):
+                raise PermissionDenied(
+                    "This is a paid course. You must pay or have sponsorship to enroll."
+                )
+
+        # Free course or paid course with sponsorship/payment
         serializer.save(student=user)
-    
-    
 
-    @action(detail=True, methods=['patch'], url_path='update_progress', permission_classes=[IsStudentOrAdmin])
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path="update_progress",
+        permission_classes=[IsStudentOrAdmin],
+    )
     def update_progress(self, request, pk=None):
-            enrollment = self.get_object()
+        enrollment = self.get_object()
 
-            # Validate progress
-            progress = request.data.get("progress")
-            try:
-                progress = float(progress)
-            except (ValueError, TypeError):
-                return Response({"error": "Progress must be a number"}, status=status.HTTP_400_BAD_REQUEST)
+        # Validate progress
+        progress = request.data.get("progress")
+        try:
+            progress = float(progress)
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Progress must be a number"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-            if not (0 <= progress <= 100):
-                return Response({"error": "Progress must be between 0 and 100"}, status=status.HTTP_400_BAD_REQUEST)
+        if not (0 <= progress <= 100):
+            return Response(
+                {"error": "Progress must be between 0 and 100"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-            enrollment.progress = progress
-            enrollment.save()
-            return Response({"message": "Progress updated successfully"})
+        enrollment.progress = progress
+        enrollment.save()
+        return Response({"message": "Progress updated successfully"})
+
+    @action(detail=False, methods=["post"], url_path="simulate-payment")
+    def simulate_payment_api(self, request):
+        student = request.user
+        course_id = request.data.get("course")
+
+        # Validate course ID
+        if not course_id:
+            return Response(
+                {"error": "Course ID is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            course = Course.objects.get(id=course_id)
+        except Course.DoesNotExist:
+            return Response(
+                {"error": "Course not found."}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if student is already enrolled
+        if Enrollment.objects.filter(student=student, course=course).exists():
+            return Response(
+                {"message": f"You are already enrolled in {course.name}."},
+                status=status.HTTP_200_OK,
+            )
+
+        # Free course → enroll directly
+        if not course.is_paid or course.price == 0:
+            Enrollment.objects.create(student=student, course=course, progress=0)
+            return Response(
+                {"message": f"Successfully enrolled in free course {course.name}."},
+                status=status.HTTP_201_CREATED,
+            )
+
+        # Paid course → simulate payment first
+        payment_success = simulate_payment(student, course)
+
+        if payment_success:
+            # Enroll student after payment
+            Enrollment.objects.create(student=student, course=course, progress=0)
+            return Response(
+                {"message": f"Payment completed and enrolled in {course.name}."},
+                status=status.HTTP_201_CREATED,
+            )
+        else:
+            return Response(
+                {"error": "Payment failed. Cannot enroll in course."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
 
 # class for Assessement -----------------------------------------------------
 class AssessmentViewSet(ModelViewSet):
@@ -258,10 +364,13 @@ class AssessmentViewSet(ModelViewSet):
     - Only instructors (course owners) can create or update assessments.
     - Students can only view assessments.
     """
+
     queryset = Assessment.objects.all()
     serializer_class = AssessmentSerializer
-    permission_classes = [IsAuthenticated, DjangoModelPermissions]  # Must be logged in # this is for permission
-
+    permission_classes = [
+        IsAuthenticated,
+        DjangoModelPermissions,
+    ]  # Must be logged in # this is for permission
 
     def perform_create(self, serializer):
         """
@@ -274,9 +383,9 @@ class AssessmentViewSet(ModelViewSet):
         if course.instructor != user:
             return Response(
                 {"error": "You are not the instructor for this course."},
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
-        
+
         serializer.save()
 
     def get_queryset(self):
@@ -321,13 +430,19 @@ class IsInstructorOrAdmin(BasePermission):
             return True
 
         # Check if user is instructor of the related course
-        return user.groups.filter(name="Instructor").exists() and obj.assessment.course.instructor == user
+        return (
+            user.groups.filter(name="Instructor").exists()
+            and obj.assessment.course.instructor == user
+        )
+
 
 class SubmissionViewSet(ModelViewSet):
     queryset = Submission.objects.all()
     serializer_class = SubmissionSerializer
-    permission_classes = [IsAuthenticated, DjangoModelPermissions]  # Must be logged in # this is for permission
-
+    permission_classes = [
+        IsAuthenticated,
+        DjangoModelPermissions,
+    ]  # Must be logged in # this is for permission
 
     def get_queryset(self):
         user = self.request.user
@@ -338,7 +453,6 @@ class SubmissionViewSet(ModelViewSet):
         elif user.groups.filter(name="Student").exists():
             return Submission.objects.filter(student=user)
         return Submission.objects.none()
-    
 
     @action(detail=True, methods=["patch"], permission_classes=[IsInstructorOrAdmin])
     def grade_submission(self, request, pk=None):
@@ -352,17 +466,23 @@ class SubmissionViewSet(ModelViewSet):
         try:
             grade = float(grade)
         except (ValueError, TypeError):
-            return Response({"error": "Grade must be a numeric value"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Grade must be a numeric value"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not (0 <= grade <= 100):
-            return Response({"error": "Grade must be between 0 and 100"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Grade must be between 0 and 100"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         submission.grade = grade
         submission.save()
 
         return Response(
             {"message": "Submission graded successfully", "grade": submission.grade},
-            status=status.HTTP_200_OK
+            status=status.HTTP_200_OK,
         )
 
 
@@ -403,10 +523,9 @@ class SponsorProfileViewSet(ModelViewSet):
             raise PermissionDenied("Only sponsors can create sponsor profiles.")
 
         serializer.save(sponsor=user)
-    
 
-# To update funds incrementally
-# inside SponsorProfileViewSet
+    # To update funds incrementally
+    # inside SponsorProfileViewSet
 
     @action(detail=True, methods=["patch"], url_path="add-funds")
     def add_funds(self, request, pk=None):
@@ -436,14 +555,15 @@ class SponsorProfileViewSet(ModelViewSet):
             transaction_type="ADD",
             amount=amount,
             balance_after=sponsor_profile.total_funds,
-            description=f"Added {amount} funds."
+            description=f"Added {amount} funds.",
         )
 
-        return Response({
-            "message": f"Successfully added {amount} to sponsor funds.",
-            "total_funds": str(sponsor_profile.total_funds)
-        })
-
+        return Response(
+            {
+                "message": f"Successfully added {amount} to sponsor funds.",
+                "total_funds": str(sponsor_profile.total_funds),
+            }
+        )
 
     @action(detail=True, methods=["patch"], url_path="deduct-funds")
     def deduct_funds(self, request, pk=None):
@@ -479,14 +599,15 @@ class SponsorProfileViewSet(ModelViewSet):
             transaction_type="DEDUCT",
             amount=amount,
             balance_after=sponsor_profile.total_funds,
-            description=f"Deducted {amount} funds."
+            description=f"Deducted {amount} funds.",
         )
 
-        return Response({
-            "message": f"Successfully deducted {amount} from sponsor funds.",
-            "total_funds": str(sponsor_profile.total_funds)
-        })
-
+        return Response(
+            {
+                "message": f"Successfully deducted {amount} from sponsor funds.",
+                "total_funds": str(sponsor_profile.total_funds),
+            }
+        )
 
     @action(detail=True, methods=["get"], url_path="transactions")
     def view_transactions(self, request, pk=None):
@@ -496,7 +617,9 @@ class SponsorProfileViewSet(ModelViewSet):
         Returns a list of all transactions for this sponsor.
         """
         sponsor_profile = self.get_object()
-        transactions = SponsorTransaction.objects.filter(sponsor=sponsor_profile.sponsor)
+        transactions = SponsorTransaction.objects.filter(
+            sponsor=sponsor_profile.sponsor
+        )
         data = [
             {
                 "type": t.transaction_type,
@@ -508,6 +631,7 @@ class SponsorProfileViewSet(ModelViewSet):
             for t in transactions
         ]
         return Response(data)
+
 
 # View for SponsorShip model ------------------------------------------------------
 class SponsorshipViewSet(ModelViewSet):
@@ -542,7 +666,9 @@ class SponsorshipViewSet(ModelViewSet):
         try:
             sponsor_profile = SponsorProfile.objects.get(sponsor=user)
         except SponsorProfile.DoesNotExist:
-            raise PermissionDenied("You must have a SponsorProfile to create sponsorships.")
+            raise PermissionDenied(
+                "You must have a SponsorProfile to create sponsorships."
+            )
 
         sponsorship = serializer.save(sponsor=sponsor_profile)
 
@@ -559,6 +685,35 @@ class SponsorshipViewSet(ModelViewSet):
             transaction_type="DEDUCT",
             amount=sponsorship.amount,
             balance_after=sponsor_profile.total_funds,
-            description=f"Sponsorship for {sponsorship.student.username}"
+            description=f"Sponsorship for {sponsorship.student.username}",
         )
 
+
+# notification system for Instructor and Sponsor ---------------------------------------------------
+
+
+class InstructorNotificationViewSet(ViewSet):
+    """
+    Whenever a student updates progress or completes a course,
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        user = request.user
+        if not user.groups.filter(name="Instructor").exists():
+            return Response(
+                {"detail": "Access denied. Only instructors can view this."}, status=403
+            )
+
+        notifications = Notification.objects.filter(user=user).order_by("-created_at")
+        data = [
+            {
+                "id": n.id,
+                "message": n.message,
+                "created_at": n.created_at,
+                "is_read": n.is_read,
+            }
+            for n in notifications
+        ]
+        return Response(data)
