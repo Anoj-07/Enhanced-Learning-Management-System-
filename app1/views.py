@@ -42,6 +42,20 @@ from rest_framework.response import Response
 from rest_framework.decorators import action, api_view, permission_classes
 from decimal import Decimal, InvalidOperation
 from .utils import simulate_payment
+from rest_framework import filters
+from rest_framework.pagination import PageNumberPagination
+from django_filters.rest_framework import DjangoFilterBackend
+from .filter import SponsorshipFilter
+
+
+# this is claSS for pagination --------------------------------------------------------------
+class StandardResultsSetPagination(PageNumberPagination):
+    """
+    Standard pagination for courses, students, sponsorships, etc.
+    """
+    page_size = 10  # default items per page
+    page_size_query_param = "page_size"  # allow ?page_size=20
+    max_page_size = 100
 
 
 # Create your views here.
@@ -63,6 +77,10 @@ class CourseViewSet(ModelViewSet):
     queryset = Course.objects.all()
     serializer_class = CourseSerializer
     permission_classes = [IsAuthenticated, DjangoModelPermissions]
+
+    filter_backends = [filters.SearchFilter]
+    search_fields = ["name", "instructor__username", "difficulty_level"]
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         """
@@ -232,6 +250,10 @@ class EnrollmentViewSet(ModelViewSet):
         IsAuthenticated,
         DjangoModelPermissions,
     ]  # Must be logged in # this is for permission
+
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter]    
+    search_fields = ["course__name", "student__username"]
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         user = self.request.user
@@ -644,6 +666,11 @@ class SponsorshipViewSet(ModelViewSet):
     queryset = Sponsorship.objects.all()
     serializer_class = SponsorshipSerializer
     permission_classes = [IsAuthenticated, DjangoModelPermissions]
+
+    filter_backends = [filters.SearchFilter]
+    search_fields = ["student__username",  "course__name"]
+    filterset_class = SponsorshipFilter
+    pagination_class = StandardResultsSetPagination
 
     def get_queryset(self):
         user = self.request.user
