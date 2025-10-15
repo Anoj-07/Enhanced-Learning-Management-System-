@@ -27,6 +27,8 @@ from app1.views import (
     SponsorProfileViewSet,
     SponsorshipViewSet,
     InstructorNotificationViewSet,
+    SponsorStudentProgressViewSet,
+    StudentNotificationViewSet,
 )
 from rest_framework.routers import DefaultRouter
 
@@ -43,6 +45,8 @@ router.register(
     InstructorNotificationViewSet,
     basename="instructor-notifications",
 )
+router.register(r"sponsor-progress", SponsorStudentProgressViewSet, basename="sponsor-progress")
+router.register(r"student-notifications", StudentNotificationViewSet, basename="student-notifications")  
 
 
 urlpatterns = [

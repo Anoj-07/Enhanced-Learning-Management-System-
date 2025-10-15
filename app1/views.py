@@ -45,7 +45,35 @@ from .utils import simulate_payment
 from rest_framework import filters
 from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
-from .filter import SponsorshipFilter
+
+
+
+
+from rest_framework.viewsets import ReadOnlyModelViewSet
+from .filter import SponsorStudentFilter
+
+class SponsorStudentProgressViewSet(ReadOnlyModelViewSet):
+    """
+    Allows sponsors to view and filter their sponsored students' progress.
+    Filters: progress__gte, progress__lte, course__name, student__username
+    """
+
+    serializer_class = EnrollmentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ["progress", "course__name", "student__username"]
+    search_fields = ["student__username", "course__name"]
+    ordering_fields = ["progress", "enrolled_at"]
+    filterset_class = SponsorStudentFilter
+
+    def get_queryset(self):
+        user = self.request.user
+        # Only allow sponsors to see their sponsored students' enrollments
+        if user.groups.filter(name="Sponsor").exists():
+            sponsored_students = Sponsorship.objects.filter(sponsor__sponsor=user).values_list("student", flat=True)
+            return Enrollment.objects.filter(student__in=sponsored_students)
+        return Enrollment.objects.none()
+
 
 
 # this is claSS for pagination --------------------------------------------------------------
@@ -251,9 +279,10 @@ class EnrollmentViewSet(ModelViewSet):
         DjangoModelPermissions,
     ]  # Must be logged in # this is for permission
 
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]    
-    search_fields = ["course__name", "student__username"]
-    pagination_class = StandardResultsSetPagination
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ["progress", "course__name", "student__username"]  # ⚡ filterable fields
+    search_fields = ["student__username", "course__name"]
+    ordering_fields = ["progress", "enrolled_at"]
 
     def get_queryset(self):
         user = self.request.user
@@ -394,9 +423,10 @@ class AssessmentViewSet(ModelViewSet):
         DjangoModelPermissions,
     ]  # Must be logged in # this is for permission
 
+    
     def perform_create(self, serializer):
         """
-        Automatically ensure that only instructors of a course can create assessments.
+        Ensure only instructors can create assessments and notify students.
         """
         user = self.request.user
         course = serializer.validated_data.get("course")
@@ -408,7 +438,24 @@ class AssessmentViewSet(ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        serializer.save()
+        # Save the assessment
+        assessment = serializer.save()
+
+        # Notify all enrolled students about the new assessment
+        enrolled_students = User.objects.filter(
+            student_enrollments__course=course
+        ).distinct()
+
+        for student in enrolled_students:
+            Notification.objects.create(
+                user=student,
+                message=(
+                    f"New assignment '{assessment.title}' has been posted in "
+                    f"'{course.name}'. Due date: {assessment.due_date.strftime('%Y-%m-%d %H:%M')}"
+                ),
+            )
+
+        print(f"✅ Notifications sent to {len(enrolled_students)} students in {course.name}")
 
     def get_queryset(self):
         """
@@ -571,7 +618,7 @@ class SponsorProfileViewSet(ModelViewSet):
         sponsor_profile.total_funds += amount
         sponsor_profile.save()
 
-        # ✅ Record transaction
+        #  Record transaction
         SponsorTransaction.objects.create(
             sponsor=sponsor_profile.sponsor,
             transaction_type="ADD",
@@ -615,7 +662,7 @@ class SponsorProfileViewSet(ModelViewSet):
         sponsor_profile.total_funds -= amount
         sponsor_profile.save()
 
-        # ✅ Record transaction
+        #  Record transaction
         SponsorTransaction.objects.create(
             sponsor=sponsor_profile.sponsor,
             transaction_type="DEDUCT",
@@ -668,19 +715,28 @@ class SponsorshipViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated, DjangoModelPermissions]
 
     filter_backends = [filters.SearchFilter]
-    search_fields = ["student__username",  "course__name"]
-    filterset_class = SponsorshipFilter
+    search_fields = ["student__username", "student__first_name", "student__last_name", "course__name"]    
     pagination_class = StandardResultsSetPagination
+    ordering_fields = ["amount"]
 
     def get_queryset(self):
         user = self.request.user
+
         # Admins see all
         if user.is_staff or user.groups.filter(name="Admin").exists():
-            return Sponsorship.objects.all()
+            qs = Sponsorship.objects.all()
         # Sponsors see their own sponsorships
         elif user.groups.filter(name="Sponsor").exists():
-            return Sponsorship.objects.filter(sponsor__sponsor=user)
-        return Sponsorship.objects.none()
+            qs = Sponsorship.objects.filter(sponsor__sponsor=user)
+        else:
+            return Sponsorship.objects.none()
+
+        # ✅ Filter students by progress (via Enrollment model)
+        progress = self.request.query_params.get("progress")
+        if progress is not None:
+            qs = qs.filter(student__enrollments__progress__gte=progress)
+
+        return qs
 
     def perform_create(self, serializer):
         """
@@ -743,4 +799,44 @@ class InstructorNotificationViewSet(ViewSet):
             }
             for n in notifications
         ]
+        return Response(data)
+
+
+class StudentNotificationViewSet(ViewSet):
+    """
+    API endpoint for students to view notifications.
+    Shows notifications for new assignments with course name and due date.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request):
+        user = request.user
+
+        # Only students can access this
+        if not user.groups.filter(name="Student").exists():
+            return Response(
+                {"detail": "Access denied. Only students can view notifications."},
+                status=403
+            )
+
+        # Get notifications for this student
+        notifications = Notification.objects.filter(user=user).order_by("-created_at")
+
+        data = []
+        for n in notifications:
+            # Attempt to find related assessment if mentioned in message
+            related_assessment = None
+            for assessment in Assessment.objects.filter(course__course_enrollments__student=user):
+                if assessment.title in n.message:
+                    related_assessment = assessment
+                    break
+
+            data.append({
+                "id": n.id,
+                "message": n.message,
+                "is_read": n.is_read,
+                "due_date": related_assessment.due_date if related_assessment else None,
+            })
+
         return Response(data)
